@@ -1,5 +1,7 @@
 # LockPool
 
+[![CI](https://github.com/IronVelo/lock_pool/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IronVelo/lock_pool/actions/workflows/ci.yml)
+
 Designed to meet the stringent requirements of high-performance, real-time systems, LockPool is a high-throughput, fair,
 and thread-safe asynchronous object pool for Rust, offering unparalleled performance in environments where efficiency 
 and low latency are crucial. Its architecture is specifically tailored to operate flawlessly in a wide range of 
