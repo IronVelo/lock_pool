@@ -1,0 +1,59 @@
+[package]
+name = "lock_pool"
+version = "0.1.0"
+edition = "2021"
+authors = ["Clelland Green <cg@ironvelo.com>"]
+keywords = ["no_std", "no_alloc", "non-blocking", "embedded", "pool"]
+categories = ["concurrency", "asynchronous", "no-std::no-alloc", "no-std"]
+description = "Robust, efficient, high performance, asynchronous object pooling."
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/IronVelo/lock_pool"
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+    "README.md"
+]
+
+[features]
+std = ["ref_count/std"]
+alloc = []
+
+[dependencies]
+ref_count = "0.1.2"
+
+[dev-dependencies]
+criterion = "0.5.1"
+object-pool = "0.5.4"
+futures = "0.3.30"
+
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7.1", features = ["futures", "checkpoint"] }
+
+[profile.release]
+lto = true
+opt-level = 3
+debug = false
+
+[profile.bench]
+lto = true
+opt-level = 3
+incremental = false
+debug = false
+
+[[bench]]
+name = "try_get"
+harness = false
+
+[[bench]]
+name = "get"
+harness = false
+
+[[bench]]
+name = "relative"
+harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "doc_cfg", "--generate-link-to-definition"]
