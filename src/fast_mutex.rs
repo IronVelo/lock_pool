@@ -107,6 +107,7 @@ impl<T> FastMutex<T> {
 
     #[cfg(not(loom))]
     #[inline]
+    #[allow(clippy::mut_from_ref)]
     unsafe fn get(&self) -> &mut T {
         &mut *self.data.get()
     }

@@ -8,10 +8,10 @@ systems like Linux, without making any assumptions about the underlying asynchro
 and wakers, LockPool integrates effortlessly with any asynchronous ecosystem, maintaining runtime agnosticism and 
 ensuring wide applicability.
 
-Engineered with no_std and no_alloc constraints at its core, LockPool is an ideal solution for
-embedded systems and other memory-constrained environments where dynamic memory allocation is
-either undesirable or unavailable. This focus on minimalism and efficiency ensures that LockPool
-remains lightweight and versatile, suitable for a broad spectrum of use cases.
+Engineered with no_std and no_alloc constraints at its core, LockPool is an ideal solution for embedded systems and 
+other memory-constrained environments where dynamic memory allocation is either undesirable or unavailable. This focus 
+on minimalism and efficiency ensures that LockPool remains lightweight and versatile, suitable for a broad spectrum of 
+use cases.
 
 ### How It Works
 
@@ -75,14 +75,12 @@ async fn example() {
 }
 ```
 
-Embodying the essence of Rust's concurrency model, LockPool is a robust and efficient foundation
-for building high-performance, dependable real-time systems, ensuring that performance and
-fairness are not mutually exclusive.
-
+Embodying the essence of Rust's concurrency model, LockPool is a robust and efficient foundation for building 
+high-performance, dependable real-time systems, ensuring that performance and fairness are not mutually exclusive.
 
 ### Future Additions
 
 - `get_or_create()`: For either getting or creating an object, making the api simpler for certain connection pooling
-                     tasks.
+                     patterns.
 
   

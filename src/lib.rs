@@ -1,7 +1,17 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(not(loom), no_builtins)]
-
+#![warn(
+    clippy::all,
+    clippy::nursery,
+    clippy::pedantic,
+    clippy::cargo,
+)]
+#![allow(
+    clippy::cargo_common_metadata,
+    clippy::module_name_repetitions,
+    clippy::multiple_crate_versions
+)]
 #[macro_use]
 mod macros;
 
@@ -15,12 +25,12 @@ use future::LockFuture;
 use ref_count::pad::CacheLine;
 use ref_count::{array_queue::ArrayQueue, waiter::Waiter, futures::MaybeFuture};
 use core::ops::{Deref, DerefMut};
-use core::fmt::{self, Formatter, Debug, Display};
+use core::fmt::{self, Formatter, Debug};
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-/// # LockPool
+/// # `LockPool`
 ///
 /// A high performance, fair, reliable, asynchronous object pool implementation.
 ///
@@ -46,6 +56,12 @@ extern crate alloc;
 /// drop(g0);
 /// assert_eq!(*pool.try_get().unwrap(), 0);
 /// ```
+///
+/// # Type Parameters
+///
+/// - `T`: The type of the objects in the pool.
+/// - `SIZE`: The size of the pool, indicating how many resources it manages.
+/// - `MAX_WAITERS`: The maximum number of waiters allowed in the pool's queue.
 pub struct LockPool<T, const SIZE: usize, const MAX_WAITERS: usize> {
     pool: CacheLine<[FastMutex<T>; SIZE]>,
     #[cfg(feature = "alloc")]
@@ -54,8 +70,15 @@ pub struct LockPool<T, const SIZE: usize, const MAX_WAITERS: usize> {
     waiter_queue: ArrayQueue<Waiter, MAX_WAITERS>
 }
 
+impl<T: Default, const SIZE: usize, const MAX_WAITERS: usize> Default for LockPool<T, SIZE, MAX_WAITERS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Default, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, MAX_WAITERS> {
     #[cfg(feature = "alloc")]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pool: CacheLine::new(core::array::from_fn(|_| FastMutex::default())),
@@ -64,6 +87,7 @@ impl<T: Default, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, 
     }
 
     #[cfg(not(feature = "alloc"))]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pool: CacheLine::new(core::array::from_fn(|_| FastMutex::default())),
@@ -101,7 +125,8 @@ macro_rules! from_fn_doc {
 impl<T, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, MAX_WAITERS> {
     #[doc = from_fn_doc!()]
     #[cfg(feature = "alloc")]
-    pub fn from_fn<F: Fn(usize) -> T>(f: F) -> LockPool<T, SIZE, MAX_WAITERS> {
+    #[must_use]
+    pub fn from_fn<F: Fn(usize) -> T>(f: F) -> Self {
         Self {
             pool: CacheLine::new(core::array::from_fn(|i| FastMutex::new(f(i)))),
             waiter_queue: alloc::boxed::Box::new(ArrayQueue::new())
@@ -110,7 +135,8 @@ impl<T, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, MAX_WAITE
 
     #[doc = from_fn_doc!()]
     #[cfg(not(feature = "alloc"))]
-    pub fn from_fn<F: Fn(usize) -> T>(f: F) -> LockPool<T, SIZE, MAX_WAITERS> {
+    #[must_use]
+    pub fn from_fn<F: Fn(usize) -> T>(f: F) -> Self {
         Self {
             pool: CacheLine::new(core::array::from_fn(|i| FastMutex::new(f(i)))),
             waiter_queue: ArrayQueue::new()
@@ -122,7 +148,7 @@ impl<T, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, MAX_WAITE
     /// # Try Get
     ///
     /// This method performs a non-blocking attempt to obtain a lock on one of the objects in the
-    /// pool. If an object is available, try_get returns an Option containing a LockGuard, which
+    /// pool. If an object is available, `try_get` returns an Option containing a `LockGuard`, which
     /// provides exclusive access to the object. If no objects are available, it returns None. If
     /// you need to wait for an object see [`get`].
     ///
@@ -142,12 +168,13 @@ impl<T, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, MAX_WAITE
     /// assert_eq!(*guard, 0);
     ///
     /// let _new = match pool.try_get() {
-    ///     Some(_) => panic!("There's no objects remaining."),
+    ///     Some(_) => panic!("There are no objects remaining."),
     ///     None => 1
     /// };
     /// ```
     ///
     /// [`get`]: LockPool::get
+    #[must_use]
     #[inline]
     pub fn try_get(&self) -> Option<LockGuard<T, SIZE, MAX_WAITERS>> {
         for i in 0..SIZE {
@@ -186,28 +213,65 @@ impl<T, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, MAX_WAITE
     /// ```
     ///
     /// [`MaybeFuture`]: ref_count::futures::MaybeFuture
+    #[must_use]
     pub fn get(&self) -> MaybeFuture<LockGuard<T, SIZE, MAX_WAITERS>, LockFuture<T, SIZE, MAX_WAITERS>> {
-        if let Some(guard) = self.try_get() {
-            MaybeFuture::Ready(guard)
-        } else {
-            MaybeFuture::Future(LockFuture::new(self))
-        }
+        self.try_get()
+            .map_or_else(|| MaybeFuture::Future(LockFuture::new(self)), MaybeFuture::Ready)
     }
 }
 
+/// A guard that provides scoped access to a resource within a `LockPool`.
+///
+/// This struct is created by calling [`LockPool::try_get`] or [`LockPool::get`] and exists for the
+/// lifetime of the resource access. When this guard is dropped, the resource is automatically
+/// returned to the pool, and the next waiting task (if any) is notified that the resource is
+/// available.
+///
+/// # Example
+///
+/// ```
+/// use lock_pool::LockPool;
+///
+/// let pool = LockPool::<usize, 5, 32>::from_fn(|i| i * 10);
+/// let guard = pool.try_get().unwrap();
+///
+/// // Access the protected resource
+/// assert_eq!(*guard, 0);
+///
+/// // `guard` is automatically dropped here, returning the resource to the pool
+/// ```
+///
+/// # Type Parameters
+///
+/// - `'lock`: The lifetime of the `LockPool` from which this guard was created.
+/// - `T`: The type of the protected resource.
+/// - `SIZE`: The size of the pool, indicating how many resources it manages.
+/// - `MAX_WAITERS`: The maximum number of waiters allowed in the pool's queue.
 pub struct LockGuard<'lock, T, const SIZE: usize, const MAX_WAITERS: usize> {
+    /// A reference to the `LockPool` that owns the resource.
     pool: &'lock LockPool<T, SIZE, MAX_WAITERS>,
+    /// An instance of `FastMutexGuard`, representing the locked state of the resource.
     guard: FastMutexGuard<'lock, T>
 }
 
 impl<'lock, T, const SIZE: usize, const MAX_WAITERS: usize> Deref for LockGuard<'lock, T, SIZE, MAX_WAITERS> {
     type Target = T;
 
+    /// Provides immutable access to the protected resource.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the protected resource of type `T`.
     #[inline]
     fn deref(&self) -> &Self::Target { &self.guard }
 }
 
 impl<'lock, T, const SIZE: usize, const MAX_WAITERS: usize> DerefMut for LockGuard<'lock, T, SIZE, MAX_WAITERS> {
+    /// Provides mutable access to the protected resource.
+    ///
+    /// # Returns
+    ///
+    /// A mutable reference to the protected resource of type `T`.
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.guard
@@ -215,24 +279,59 @@ impl<'lock, T, const SIZE: usize, const MAX_WAITERS: usize> DerefMut for LockGua
 }
 
 impl<'lock, T, const SIZE: usize, const MAX_WAITERS: usize> Drop for LockGuard<'lock, T, SIZE, MAX_WAITERS> {
+    /// Drops the `LockGuard` and attempts to wake the next waiter in the queue.
+    ///
+    /// When the guard is dropped, it indicates that the resource is no longer being accessed.
+    /// This method checks if there are any tasks waiting for a resource to become available.
+    /// If so, it wakes the next task in line, allowing it to acquire the resource.
+    ///
+    /// # Behavior
+    ///
+    /// This is an automatic process triggered by the Rust runtime when the `LockGuard` goes out
+    /// of scope, ensuring that resources are efficiently managed and that waiting tasks are
+    /// promptly serviced.
+    ///
+    /// # Example
+    ///
+    /// Dropping a `LockGuard` is typically implicit when it goes out of scope:
+    ///
+    /// ```rust
+    /// use lock_pool::LockPool;
+    ///
+    /// let pool = LockPool::<usize, 5, 32>::from_fn(|i| i);
+    /// {
+    ///     let guard = pool.try_get().unwrap();
+    ///     // Resource is now locked and accessible via `guard`.
+    /// } // `guard` goes out of scope here, and `drop` is called automatically.
+    /// ```
     #[inline]
     fn drop(&mut self) {
         if let Some(waiter) = self.pool.waiter_queue.pop() {
-            waiter.wake()
+            waiter.wake();
         }
     }
 }
 
 impl<'lock, T, const SIZE: usize, const MAX_WAITERS: usize> LockGuard<'lock, T, SIZE, MAX_WAITERS> {
+    /// Creates a new `LockGuard`.
+    ///
+    /// This constructor is typically called by the `LockPool` when a resource is successfully
+    /// acquired to provide scoped access to that resource.
+    ///
+    /// # Arguments
+    ///
+    /// * `pool`  - A reference to the `LockPool` that owns the resource. This ensures that the
+    ///            `LockGuard` can notify the pool when the resource is released.
+    /// * `guard` - An instance of `FastMutexGuard` representing the locked state of the resource.
+    ///             This guard enforces exclusive access to the resource for the duration of its
+    ///             lifetime.
+    ///
+    /// # Returns
+    ///
+    /// A `LockGuard` instance that provides scoped, exclusive access to a resource within the pool.
     #[inline]
     pub const fn new(pool: &'lock LockPool<T, SIZE, MAX_WAITERS>, guard: FastMutexGuard<'lock, T>) -> Self {
         Self { pool, guard }
-    }
-}
-
-impl<T: Display, const SIZE: usize, const MAX_WAITERS: usize> Display for LockGuard<'_, T, SIZE, MAX_WAITERS> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", &self.guard)
     }
 }
 
