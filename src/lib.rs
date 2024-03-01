@@ -17,7 +17,7 @@ mod macros;
 
 pub use ref_count::maybe_await;
 
-mod fast_mutex;
+pub mod fast_mutex;
 pub mod future;
 
 use fast_mutex::{FastMutex, FastMutexGuard};
@@ -26,6 +26,7 @@ use ref_count::pad::CacheLine;
 use ref_count::{array_queue::ArrayQueue, waiter::Waiter, futures::MaybeFuture};
 use core::ops::{Deref, DerefMut};
 use core::fmt::{self, Formatter, Debug};
+use core::mem::MaybeUninit;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -218,6 +219,14 @@ impl<T, const SIZE: usize, const MAX_WAITERS: usize> LockPool<T, SIZE, MAX_WAITE
         self.try_get()
             .map_or_else(|| MaybeFuture::Future(LockFuture::new(self)), MaybeFuture::Ready)
     }
+
+    /// Iterate over the pool, where each element is a `FastMutex`
+    pub const fn iter(&self) -> LockPoolIter<T, SIZE, MAX_WAITERS> {
+        LockPoolIter {
+            idx: 0,
+            pool: self
+        }
+    }
 }
 
 /// A guard that provides scoped access to a resource within a `LockPool`.
@@ -340,5 +349,126 @@ impl<T: Debug, const SIZE: usize, const MAX_WAITERS: usize> Debug for LockGuard<
         f.debug_struct("LockGuard")
             .field("inner", &self.guard)
             .finish()
+    }
+}
+
+impl<T, const SIZE: usize, const MAX_WAITERS: usize> From<[T; SIZE]> for LockPool<T, SIZE, MAX_WAITERS> {
+    fn from(value: [T; SIZE]) -> Self {
+        let mut temp: [MaybeUninit<FastMutex<T>>; SIZE] = unsafe {
+            MaybeUninit::uninit().assume_init()
+        };
+        for i in 0..SIZE {
+            // SAFETY: we are only iterating in bounds.
+            let slot = unsafe { temp.get_unchecked_mut(i) };
+            // SAFETY: we ensure that there is no double free after the loop.
+            slot.write(FastMutex::new(unsafe { (value.get_unchecked(i) as *const T).read() }));
+        }
+        // ensure no double free
+        core::mem::forget(value);
+
+        #[cfg(not(feature = "alloc"))] {
+        Self {
+            // SAFETY: MaybeUninit has the same size, alignment, and ABI as T
+            pool: CacheLine::new(unsafe { core::mem::transmute_copy(&temp) }),
+            waiter_queue: ArrayQueue::new()
+        }}
+        #[cfg(feature = "alloc")] {
+        Self {
+            // SAFETY: MaybeUninit has the same size, alignment, and ABI as T
+            pool: CacheLine::new(unsafe { core::mem::transmute_copy(&temp) }),
+            waiter_queue: alloc::boxed::Box::new(ArrayQueue::new())
+        }}
+    }
+}
+
+impl<'pool, T, const SIZE: usize, const MAX_WAITERS: usize> IntoIterator for &'pool LockPool<T, SIZE, MAX_WAITERS> {
+    type Item = &'pool FastMutex<T>;
+    type IntoIter = LockPoolIter<'pool, T, SIZE, MAX_WAITERS>;
+
+    #[inline]
+    /// Iterate over the pool, where each element is a `FastMutex`
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+#[doc(hidden)]
+pub struct LockPoolIter<'pool, T, const SIZE: usize, const MAX_WAITERS: usize> {
+    pool: &'pool LockPool<T, SIZE, MAX_WAITERS>,
+    idx: usize
+}
+
+impl<'pool, T, const SIZE: usize, const MAX_WAITERS: usize> Iterator for LockPoolIter<'pool, T, SIZE, MAX_WAITERS> {
+    type Item = &'pool FastMutex<T>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx < SIZE {
+            let old = self.idx;
+            self.idx += 1;
+            Some( unsafe { self.pool.pool.get_unchecked(old) })
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn iter() {
+        let pool = LockPool::<usize, 8, 1>::from_fn(|i| i);
+        let mut visited = 0usize;
+
+        for data in &pool {
+            unsafe { data.peek(|v| assert_eq!(*v, visited)) }
+            visited += 1;
+        }
+
+        assert_eq!(visited, 8);
+    }
+
+    #[test]
+    fn from_array() {
+        let pool: LockPool<usize, 4, 1> = LockPool::from([0, 1, 2, 3]);
+
+        let g0 = pool.try_get().unwrap();
+        assert_eq!(*g0, 0);
+        let g1 = pool.try_get().unwrap();
+        assert_eq!(*g1, 1);
+        let g2 = pool.try_get().unwrap();
+        assert_eq!(*g2, 2);
+        let g3 = pool.try_get().unwrap();
+        assert_eq!(*g3, 3);
+        drop(g2);
+        let g2 = pool.try_get().unwrap();
+        assert_eq!(*g2, 2);
+    }
+
+    #[test]
+    fn from_array_string() {
+        extern crate alloc;
+        use alloc::string::String;
+
+        let pool: LockPool<String, 4, 1> = LockPool::from([
+            String::from("0"),
+            String::from("1"),
+            String::from("2"),
+            String::from("3")
+        ]);
+
+        let g0 = pool.try_get().unwrap();
+        assert_eq!(*g0, String::from("0"));
+        let g1 = pool.try_get().unwrap();
+        assert_eq!(*g1, String::from("1"));
+        let g2 = pool.try_get().unwrap();
+        assert_eq!(*g2, String::from("2"));
+        let g3 = pool.try_get().unwrap();
+        assert_eq!(*g3, String::from("3"));
+        drop(g2);
+        let g2 = pool.try_get().unwrap();
+        assert_eq!(*g2, String::from("2"));
     }
 }

@@ -1,6 +1,6 @@
 #[cfg(loom)]
 mod loom {
-    use lock_pool::{LockPool, maybe_await};
+    use lock_pool::{LockPool, maybe_await, fast_mutex::FastMutex};
     use loom::thread;
     use loom::sync::Arc;
     use loom::future::block_on;
@@ -108,6 +108,33 @@ mod loom {
 
             t1.join().unwrap();
             t2.join().unwrap();
+        })
+    }
+
+    #[test]
+    fn try_while_locked_fast_mutex() {
+        loom::model(|| {
+            let successes_src = Arc::new(core::sync::atomic::AtomicU32::new(0));
+            let m = Arc::new(FastMutex::new(0));
+            let mc = m.clone();
+            let successes = successes_src.clone();
+            let t1 = thread::spawn(move || {
+                successes.fetch_add(mc.try_while_locked(|v| {*v += 1}).is_some() as u32, core::sync::atomic::Ordering::AcqRel);
+            });
+
+            let mc = m.clone();
+            let successes = successes_src.clone();
+            let t2 = thread::spawn(move || {
+                successes.fetch_add(mc.try_while_locked(|v| {*v += 1}).is_some() as u32, core::sync::atomic::Ordering::AcqRel);
+            });
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+
+            let successes = successes_src.load(core::sync::atomic::Ordering::Acquire);
+            assert_eq!(
+                unsafe { m.peek(|v| *v) }, successes
+            );
         })
     }
 }

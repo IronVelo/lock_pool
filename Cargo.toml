@@ -1,11 +1,11 @@
 [package]
 name = "lock_pool"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Clelland Green <cg@ironvelo.com>"]
 keywords = ["no_std", "no_alloc", "non-blocking", "embedded", "pool"]
 categories = ["concurrency", "asynchronous", "no-std::no-alloc", "no-std"]
-description = "Robust, efficient, high performance, asynchronous object pooling."
+description = "Robust, efficient, high performance, asynchronous object pooling"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/IronVelo/lock_pool"
